@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chunked File Upload with Pause, Resume, and Checksum</title>
+</head>
+<body>
+    <h1>Chunked File Upload with Pause, Resume, and Checksum Verification</h1>
+    
+    <input type="file" id="fileInput" />
+    <button id="uploadBtn" onclick="startUpload()">Upload</button>
+    <button id="pauseBtn" onclick="pauseUpload()">Pause</button>
+    <button id="resumeBtn" onclick="resumeUpload()">Resume</button>
+    <button id="cancelBtn" onclick="cancelUpload()">Cancel</button>
+    <br />
+    <progress id="progressBar" value="0" max="100"></progress>
+    <p id="status"></p>
+
+    <script>
+        let file;
+        let chunkSize = 1024 * 1024; // 1MB
+        let currentChunk = 0;
+        let totalChunks;
+        let paused = false;
+        let cancelled = false;
+
+        // شروع آپلود
+        function startUpload() {
+            const fileInput = document.getElementById('fileInput');
+            file = fileInput.files[0];
+            if (!file) {
+                document.getElementById('status').textContent = "Please select a file first.";
+                return;
+            }
+
+            totalChunks = Math.ceil(file.size / chunkSize);
+            currentChunk = 0;
+            paused = false;
+            cancelled = false;
+
+            document.getElementById('status').textContent = "Uploading...";
+            uploadNextChunk();
+        }
+
+        // آپلود چانک بعدی
+        async function uploadNextChunk() {
+            if (paused || cancelled || currentChunk >= totalChunks) {
+                return;
+            }
+
+            const start = currentChunk * chunkSize;
+            const end = Math.min(file.size, start + chunkSize);
+            const chunk = file.slice(start, end);
+
+            const formData = new FormData();
+            formData.append("file", chunk);
+            formData.append("chunkNumber", currentChunk);
+            formData.append("totalChunks", totalChunks);
+            formData.append("fileName", file.name);
+
+            const response = await fetch('https://localhost:7094/api/FileManager/upload-chunk', {
+                method: 'POST',
+                body: formData
+            });
+	
+            if (response.ok) {
+                currentChunk++;
+                updateProgress();
+                if (currentChunk < totalChunks) {
+                    uploadNextChunk();
+                } else {
+                    document.getElementById('status').textContent = "Upload complete. Verifying checksum...";
+                    verifyChecksum();
+                }
+            } else {
+                document.getElementById('status').textContent = "Error uploading chunk.";
+            }
+        }
+
+        // محاسبه و نمایش درصد پیشرفت
+        function updateProgress() {
+            const progress = (currentChunk / totalChunks) * 100;
+            document.getElementById('progressBar').value = progress;
+        }
+
+        // محاسبه checksum و بررسی
+        async function verifyChecksum() {
+            const response = await fetch('https://localhost:7094/api/FileManager/complete-upload', {
+                method: 'POST',
+                body: JSON.stringify({ fileName: file.name }),
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await response.json();
+            const serverChecksum = data.checksum;
+
+            const clientChecksum = await calculateChecksum(file);
+            if (clientChecksum === serverChecksum) {
+                document.getElementById('status').textContent = "Upload successful. Checksums match!";
+            } else {
+                document.getElementById('status').textContent = "Checksum mismatch. Upload might be corrupted.";
+            }
+        }
+
+        // محاسبه checksum در کلاینت
+        async function calculateChecksum(file) {
+            const buffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            return hashHex;
+        }
+
+        // توقف آپلود
+        function pauseUpload() {
+            paused = true;
+            document.getElementById('status').textContent = "Upload paused.";
+        }
+
+        // ادامه آپلود
+        function resumeUpload() {
+            if (!paused) return;
+            paused = false;
+            document.getElementById('status').textContent = "Resuming upload...";
+            uploadNextChunk();
+        }
+
+        // لغو آپلود
+        function cancelUpload() {
+            cancelled = true;
+            document.getElementById('status').textContent = "Upload cancelled.";
+            document.getElementById('progressBar').value = 0;
+        }
+    </script>
+</body>
+</html>
